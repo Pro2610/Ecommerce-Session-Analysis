@@ -1,0 +1,51 @@
+-- Step 1: Define the session data
+WITH session_data AS (
+  SELECT 
+    -- Convert event timestamp from microseconds to TIMESTAMP
+    TIMESTAMP_MICROS(event_timestamp) AS event_timestamp,
+    -- Extract event date from the timestamp
+    DATE(TIMESTAMP_MICROS(event_timestamp)) AS event_date, 
+    -- Use either user_pseudo_id or user_id as the user identifier
+    COALESCE(user_pseudo_id, user_id) AS user_id,
+    -- Extract session ID from event parameters
+    (SELECT value.int_value FROM UNNEST(event_params) WHERE key = 'ga_session_id') AS session_id, 
+    -- Include the event name for further filtering
+    event_name,
+    -- Extract traffic source details: source, medium, and campaign name
+    traffic_source.source AS source,
+    traffic_source.medium AS medium,
+    SAFE_CAST(traffic_source.name AS STRING) AS campaign 
+  FROM 
+    -- Access the BigQuery public dataset for GA4 sample eCommerce events
+    `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`  
+  WHERE          
+    -- Filter for relevant events
+    event_name = 'session_start' 
+    OR event_name = 'add_to_cart' 
+    OR event_name = 'begin_checkout' 
+    OR event_name = 'purchase'  
+)
+
+-- Step 2: Aggregate session-level metrics
+SELECT 
+  -- Group by event date, source, medium, and campaign
+  event_date,                                             
+  source,                                                 
+  medium,                                                 
+  campaign,
+  -- Count unique user-session combinations
+  COUNT(DISTINCT user_id || '-' || session_id) AS user_sessions_count,
+  -- Calculate visit-to-cart conversion rate
+  COUNTIF(event_name = 'add_to_cart') / NULLIF(COUNT(DISTINCT user_id || '-' || session_id), 0) AS visit_to_cart,
+  -- Calculate visit-to-checkout conversion rate
+  COUNTIF(event_name = 'begin_checkout') / NULLIF(COUNT(DISTINCT user_id || '-' || session_id), 0) AS visit_to_checkout,
+  -- Calculate visit-to-purchase conversion rate
+  COUNTIF(event_name = 'purchase') / NULLIF(COUNT(DISTINCT user_id || '-' || session_id), 0) AS visit_to_purchase
+FROM 
+  session_data
+-- Step 3: Group and sort results
+GROUP BY 
+  event_date, source, medium, campaign
+ORDER BY 
+  event_date, source, medium, campaign
+LIMIT 1000; -- Limit the output to 1000 rows for better performance
